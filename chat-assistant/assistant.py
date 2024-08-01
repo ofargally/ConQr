@@ -10,6 +10,8 @@ import pyperclip
 import pyaudio
 import os
 import time
+import re
+
 
 #Fetch the API keys from project environment
 load_dotenv()
@@ -17,6 +19,7 @@ groq_api_key = os.getenv("GROQ_API_KEY")
 genai_api_key = os.getenv("GENAI_API_KEY")
 openai_api_key = os.getenv("OPENAI_API_KEY")
 
+wake_word = "Jarvis"
 qroq_client = Groq(api_key=groq_api_key)
 genai.configure(api_key=genai_api_key)
 openai_client = OpenAI(api_key=openai_api_key)
@@ -72,6 +75,9 @@ whisper_model = WhisperModel(model_size_or_path='base',
                              cpu_threads= num_cores // 2,
                              num_workers= num_cores // 2)
 
+r = sr.Recognizer()
+source = sr.Microphone()
+
 def groq_prompt(prompt, image_context):
     if image_context:
         prompt = f'USER PROMPT: {prompt}\n\n IMAGE CONTEXT: {image_context}'
@@ -105,7 +111,7 @@ def function_call(prompt):
     return response.content
 
 def take_screenshot():
-    path = './chat-assistant/screenshots/screenshot.jpg'
+    path = './screenshots/screenshot.jpg'
     screenshot = ImageGrab.grab()
     rgb_screenshot = screenshot.convert('RGB')
     rgb_screenshot.save(path, quality=15)
@@ -114,7 +120,7 @@ def web_cam_capture():
     if not webcam.isOpened():
         print("Cannot open webcam")
         exit()
-    path = './chat-assistant/screenshots/webcam.jpg'
+    path = './screenshots/webcam.jpg'
     ret, frame = webcam.read() #Read an image from the webcam
     if not ret:
         print("Can't receive frame (stream end?). Exiting ...")
@@ -129,8 +135,8 @@ def get_clipboard_text():
         print('No text found on clipboard') 
         return None
 
-def vision_prompt(prompt, photopath):
-    image = Image.open(photopath)
+def vision_prompt(prompt, photo_path):
+    image = Image.open(photo_path)
     prompt = (
         'You are the vision analysis AI that provides semantic meaning from images to provide context '
         'to send to another AI that will create a response to the user. Do not respond as the AI assistant '
@@ -144,43 +150,72 @@ def vision_prompt(prompt, photopath):
 def speak(text):
     player_stream = pyaudio.PyAudio().open(format=pyaudio.paInt16, channels=1, rate=24000, output=True)
     stream_start = False
-    response = openai_client.audio.speech.with_streaming_response.create(
+    with openai_client.audio.speech.with_streaming_response.create(
         model='tts-1',
         voice='onyx',
         response_format='pcm',
         input=text,
-    )
-    silence_threshold = 0.01
-    for chunk in response.iter_bytes(chunk_size=1024):
-        if stream_start:
-            player_stream.write(chunk)
-        else:
-            if max(chunk) > silence_threshold:
+    ) as response:
+        silence_threshold = 0.01
+        for chunk in response.iter_bytes(chunk_size=1024):
+            if stream_start:
                 player_stream.write(chunk)
-                stream_start = True
+            else:
+                if max(chunk) > silence_threshold:
+                    player_stream.write(chunk)
+                    stream_start = True
 
 def wav_to_text(audio_path):
     segments, _ = whisper_model.transcribe(audio_path)
     text = ''.join(segment.text for segment in segments)
     return text
 
-while True:
-    visual_content = None
-    prompt = input("USER: ")
-    call = function_call(prompt)
-    if "take screenshot" in call:
-        print("Taking Screenshot")
-        take_screenshot()
-        visual_content = vision_prompt(prompt=prompt, photopath='./chat-assistant/screenshots/screenshot.jpg')
-    elif "capture webcam" in call:
-        print("Taking Webcam Capture")
-        web_cam_capture()
-        visual_content = vision_prompt(prompt=prompt, photopath='./chat-assistant/screenshots/webcam.jpg')
-    elif 'extract clipboard' in call:
-        print('Copying clipboard text')
-        paste = get_clipboard_text()
-        prompt = f'{prompt}\n\n CLIPBOARD CONTENT: {paste}'
-        visual_content = None
-    response = groq_prompt(prompt=prompt, image_context=visual_content)
-    print(f'LLAMA: {response}')
-    #speak(response)
+def callback(recognizer, audio):
+    prompt_audio_path = "prompt.wav"
+    with open(prompt_audio_path, "wb") as f:
+        f.write(audio.get_wav_data())
+
+    prompt_text = wav_to_text(prompt_audio_path)
+    clean_prompt = extract_prompt(prompt_text, wake_word)
+
+    if clean_prompt:
+        print(f"USER: {clean_prompt}")
+        call = function_call(clean_prompt)
+        if "take screenshot" in call:
+            print("Taking screenshot.")
+            take_screenshot()
+            visual_context = vision_prompt(prompt=clean_prompt, photo_path="./screenshots/screenshot.jpg")
+        elif "capture webcam" in call:
+            print("Capturing webcam.")
+            web_cam_capture()
+            visual_context = vision_prompt(prompt=clean_prompt, photo_path="./screenshots/webcam.jpg")
+        elif "extract clipboard" in call:
+            print("Extracting clipboard text.")
+            paste = get_clipboard_text()
+            clean_prompt = f"{clean_prompt} \n\n CLIPBOARD CONTENT: {paste}"
+            visual_context = None
+        else:
+            visual_context = None
+        
+        response = groq_prompt(prompt=clean_prompt, image_context=visual_context)
+        print(f"ASSISTANT: {response}")
+        speak(response)
+
+def start_listening():
+    with source as s:
+        r.adjust_for_ambient_noise(s, duration=2)
+    print(f'\nSay {wake_word} followed by your prompt. \n')
+    r.listen_in_background(source, callback)
+    while True:
+        time.sleep(0.5)
+
+def extract_prompt(transcriped_text, wake_word):
+    pattern = rf'\b{re.escape(wake_word)}[\s,.?!]*([A-Za-z0-9].*)'
+    match = re.search(pattern, transcriped_text, re.IGNORECASE)
+    if match: 
+        prompt = match.group(1).strip()
+        return prompt
+    else:
+        return None
+
+start_listening()
