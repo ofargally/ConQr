@@ -3,6 +3,7 @@ import mongoose from "mongoose";
 import cors from "cors";
 import dotenv from "dotenv";
 import conversationRoutes from "./routes/ConversationRoutes";
+import artifactRoutes from "./routes/ArtifactRoutes";
 
 dotenv.config();
 
@@ -19,6 +20,7 @@ mongoose
 const PORT = process.env.PORT || 5700;
 
 app.use("/api/conversation", conversationRoutes);
+app.use("/api/artifacts", artifactRoutes);
 
 app.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);
