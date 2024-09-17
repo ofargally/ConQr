@@ -1,5 +1,6 @@
 import axios from "axios";
 
+//TODO: Find a way to not hardcode the port
 const API_URL = `http://localhost:5001/api/artifacts`;
 
 export interface Artifact {

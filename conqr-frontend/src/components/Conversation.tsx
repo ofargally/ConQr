@@ -35,6 +35,7 @@ const Conversation: React.FC<ConversationProps> = ({
     }
   }, [theme, newWords, learnedWords]);
 
+
   useEffect(() => {
     fetchConversation();
   }, []); // Empty dependency array means this effect runs once on mount
